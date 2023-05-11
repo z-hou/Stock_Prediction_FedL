@@ -49,18 +49,18 @@ def data_preprocess(data_path, seq_length):
     test_set_size = int(np.round(0.2 * dataset.shape[0]))
     train_set_size = dataset.shape[0] - (test_set_size)
 
-    x_train = dataset[:train_set_size, :-1, :]
-    y_train = dataset[:train_set_size, -1, :]
+    train_data = dataset[:train_set_size, :-1, :]
+    train_label = dataset[:train_set_size, -1, :]
 
-    x_test = dataset[train_set_size:, :-1]
-    y_test = dataset[train_set_size:, -1, :]
+    test_data = dataset[train_set_size:, :-1]
+    test_label = dataset[train_set_size:, -1, :]
 
-    print("x_train's shape: ", x_train.shape)
-    print("y_train's shape: ", y_train.shape)
-    print("x_test's shape: ", x_test.shape)
-    print("y_test's shape: ", y_test.shape)
+    print("x_train's shape: ", train_data.shape)
+    print("y_train's shape: ", train_label.shape)
+    print("x_test's shape: ", test_data.shape)
+    print("y_test's shape: ", test_label.shape)
 
-    return [x_train, y_train, x_test, y_test, scaler]
+    return train_data, train_label, test_data, test_label, scaler
 
 
 def build_model(input_dim, hidden_dim, num_layers, output_dim):
@@ -71,47 +71,49 @@ def build_model(input_dim, hidden_dim, num_layers, output_dim):
 
 def train(model, num_epochs, x_train, y_train_lstm, criterion, optimiser):
     loss_list=[]
-    for t in range(num_epochs):
+    for i in range(num_epochs):
         y_train_pred = model(x_train)
         loss = criterion(y_train_pred, y_train_lstm)
-        print("Epoch ", t, "MSE: ", loss.item())
+        print("Epoch ", i, "MSE: ", loss.item())
         loss_list.append(loss.item())
         optimiser.zero_grad()
         loss.backward()
-        optimiser.step()  
+        optimiser.step()
+    torch.save(model, "price_predictor_epo{}.pth".format(num_epochs))
     return y_train_pred, loss_list
 
 
 def evaluation(model, x_test, test_label, scaler):
     model = model.eval()
-    y_test_pred = model(x_test)
-    y_test_pred = y_test_pred.detach().numpy()
+    #torch.onnx.export(model, x_test, "model.onnx", verbose=True)
+    test_pred = model(x_test)
+    test_pred = test_pred.detach().numpy()
     #print("check y_test_pred: ", y_test_pred)
-    print("predcition is: ", y_test_pred.shape, type(y_test_pred), type(test_label), test_label.shape)
-    testScore = math.sqrt(mean_squared_error(test_label[:,0], y_test_pred[:,0]))
-    print('Test Score: %.2f RMSE' % (testScore))
+    print("predcition is: ", test_pred.shape, type(test_pred), type(test_label), test_label.shape)
+    rme_value = math.sqrt(mean_squared_error(test_label[:,0], test_pred[:,0]))
+    print('RME value: %.2f RMSE' % (rme_value))
 
-    plt.figure()
-    plt.plot(y_test_pred, color='b', label='predict_price')
-    plt.plot(test_label, color='g', label='groundTruch_price')
-    plt.xlabel('date')
-    plt.ylabel('price')
-    plt.legend()
-    plt.show()
+    #plt.figure()
+    #plt.plot(test_pred, color='b', label='predict_price')
+    #plt.plot(test_label, color='g', label='groundTruch_price')
+    #plt.xlabel('date')
+    #plt.ylabel('price')
+    #plt.legend()
+    #plt.show()
 
-    return y_test_pred
+    return test_pred
 
     
 if __name__ == '__main__':
-    x_train, y_train, x_test, y_test, scaler = data_preprocess('./yahoo_data.xlsx', seq_length=20)
+    train_data, train_label, test_data, test_label, scaler = data_preprocess('./yahoo_data.xlsx', seq_length=20)
 
-    x_train = torch.from_numpy(x_train).type(torch.Tensor)
-    x_test = torch.from_numpy(x_test).type(torch.Tensor)
+    train_data = torch.from_numpy(train_data).type(torch.Tensor)
+    test_data = torch.from_numpy(test_data).type(torch.Tensor)
     # 真实的数据标签
-    y_train_lstm = torch.from_numpy(y_train).type(torch.Tensor)
-    y_test_lstm = torch.from_numpy(y_test).type(torch.Tensor)
-    y_train_gru = torch.from_numpy(y_train).type(torch.Tensor)
-    y_test_gru = torch.from_numpy(y_test).type(torch.Tensor)
+    train_label_lstm = torch.from_numpy(train_label).type(torch.Tensor)
+    test_label_lstm = torch.from_numpy(test_label).type(torch.Tensor)
+    train_label_gru = torch.from_numpy(train_label).type(torch.Tensor)
+    test_label_gru = torch.from_numpy(test_label).type(torch.Tensor)
 
     input_dim = 1
     # 隐藏层特征的维度
@@ -120,7 +122,7 @@ if __name__ == '__main__':
     num_layers = 2
     # 预测后一天的收盘价
     output_dim = 1
-    num_epochs = 500
+    num_epochs = 100
 
     model = build_model(input_dim, hidden_dim, num_layers, output_dim)
     criterion = torch.nn.MSELoss()
@@ -130,7 +132,7 @@ if __name__ == '__main__':
     start_time = time.time()
     lstm = []
 
-    y_train_pred, loss_list = train(model, num_epochs, x_train, y_train_lstm, criterion, optimiser)
+    y_train_pred, loss_list = train(model, num_epochs, train_data, train_label_lstm, criterion, optimiser)
     plt.figure()
     plt.plot(loss_list, color='b', label='loss curve')
     plt.savefig('loss_curve.png')
@@ -139,12 +141,22 @@ if __name__ == '__main__':
     training_time = time.time() - start_time
     print("Training time: {}".format(training_time)) 
 
-    predict = pd.DataFrame(scaler.inverse_transform(y_train_pred.detach().numpy()))
-    print(predict)  # 预测值
-    original = pd.DataFrame(scaler.inverse_transform(y_train_lstm.detach().numpy()))
-    print(original)  # 真实值
-
-    evaluation(model, x_test, y_test, scaler)
-
+    #predict = pd.DataFrame(scaler.inverse_transform(y_train_pred.detach().numpy()))
+    #print(predict)  # 预测值
+    #original = pd.DataFrame(scaler.inverse_transform(train_label_lstm.detach().numpy()))
+    #print(original)  # 真实值
+    
+    test_pred = evaluation(model, test_data, test_label, scaler)
+    test_predict = pd.DataFrame(scaler.inverse_transform(test_pred))
+    test_label = pd.DataFrame(scaler.inverse_transform(test_label))
+    #print(test_predict)
+    #print(test_label)
+    plt.figure()
+    plt.plot(test_predict, color='b', label='predict_price')
+    plt.plot(test_label, color='g', label='groundTruch_price')
+    plt.xlabel('date')
+    plt.ylabel('price')
+    plt.legend()
+    plt.show()
 
 

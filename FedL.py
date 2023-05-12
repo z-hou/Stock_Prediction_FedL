@@ -18,10 +18,28 @@ import copy
 
 stock_data = pd.read_excel('./yahoo_data.xlsx')
 
+def train(model, model_index, train_data, train_label, num_epochs):
+        criterion = torch.nn.MSELoss()
+        optimiser = torch.optim.Adam(model.parameters(), lr=0.01)
+        model.train()
+        
+        train_data = torch.from_numpy(train_data).type(torch.Tensor)
+        train_label = torch.from_numpy(train_label).type(torch.Tensor)
+        #print("train data: ", train_data, train_data.shape)
+        for i in range(num_epochs):
+            train_prediction = model(train_data)
+            loss = criterion(train_prediction, train_label)
+            print("local model {}".format(model_index), " | Epoch ", i, " | Train MSE: ", loss.item())
+            optimiser.zero_grad()
+            loss.backward()
+            optimiser.step()
+        return model
+
 class EdgeSystem(object):
-    def __init__(self, model, train_data, train_label, eval_dataset, client_number, commu_round):
+    def __init__(self, model, train_data, train_label, eval_dataset, eval_datalabel, client_number, commu_round):
         self.global_model = model
         self.eval_dataset = eval_dataset
+        self.eval_datalabel = eval_datalabel
         self.local_models = []
         self.client_number = client_number
         self.commu_round = commu_round
@@ -36,12 +54,13 @@ class EdgeSystem(object):
             self.send_weights()
             self.clients_work()
             self.aggregation()
+            self.evaluation()
 
     def clients_work(self):
         for i in range(self.client_number):
-            self.local_models[i] = self.train(self.local_models[i], self.train_data[i], self.train_label[i], 20)
+            self.local_models[i] = train(self.local_models[i], i, self.train_data[i], self.train_label[i], 20)
 
-
+    '''
     def train(self, model, train_data, train_label, num_epochs):
         criterion = torch.nn.MSELoss()
         optimiser = torch.optim.Adam(model.parameters(), lr=0.01)
@@ -54,6 +73,7 @@ class EdgeSystem(object):
             loss.backward()
             optimiser.step()
         return model
+    '''
 
     def send_weights(self):
         params = {}
@@ -85,6 +105,25 @@ class EdgeSystem(object):
         with torch.no_grad():
             for k, v in self.global_model.named_parameters():
                 v.copy_(params[k])
+
+    def evaluation(self):
+        model = self.global_model.eval()
+        test_data = torch.from_numpy(self.eval_dataset).type(torch.Tensor)
+        #torch.onnx.export(model, x_test, "model.onnx", verbose=True)
+        test_pred = model(test_data)
+        test_pred = test_pred.detach().numpy()
+        #print("check y_test_pred: ", y_test_pred)
+        print("Global_model predcition is: ", test_pred.shape, type(test_pred), type(self.eval_datalabel), test_label.shape)
+        rme_value = math.sqrt(mean_squared_error(self.eval_datalabel[:,0], test_pred[:,0]))
+        print('RME value: %.2f RMSE' % (rme_value))
+
+        plt.figure()
+        plt.plot(test_pred, color='b', label='predict_price')
+        plt.plot(test_label, color='g', label='groundTruch_price')
+        plt.xlabel('date')
+        plt.ylabel('price')
+        plt.legend()
+        plt.show()
 
 
 
@@ -128,7 +167,7 @@ if __name__ == '__main__':
     output_dim = 1
 
     model = build_model(input_dim, hidden_dim, num_layers, output_dim)
-    EDsys = EdgeSystem(model, Partitioned_data, Partitioned_label, test_data, client_number=5, commu_round=25)
+    EDsys = EdgeSystem(model, Partitioned_data, Partitioned_label, test_data, test_label, client_number=5, commu_round=25)
     EDsys.workflow()
 
 
